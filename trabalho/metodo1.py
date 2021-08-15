@@ -2,6 +2,7 @@ import re
 import pandas as pd
 from html import unescape
 from nltk.tag import pos_tag
+from nltk.corpus import wordnet
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
 
@@ -34,7 +35,7 @@ def sequencia_pre_processamento(input_data):
     out = [limpar_padrao(x, padroes['mencao']) for x in input_data]
     out = [limpar_padrao(x, padroes['hashtag']) for x in out]
     out = [limpar_padrao(x, padroes['urls']) for x in out]
-    # out = [limpar_padrao(x, padroes['punct']) for x in out]
+    out = [limpar_padrao(x, padroes['punct']) for x in out]
     out = [x.lower() for x in out]
     out = [x.strip() for x in out]
 
@@ -44,12 +45,27 @@ def sequencia_pre_processamento(input_data):
     return out
 
 
-def tagear_pos(input_data):
-    wnl = WordNetLemmatizer
+def lematizar(input_data):
+
+    def get_wordnet_pos(treebank_tag):
+        # https://stackoverflow.com/questions/15586721/wordnet-lemmatization-and-pos-tagging-in-python
+        if treebank_tag.startswith('J'):
+            return wordnet.ADJ
+        elif treebank_tag.startswith('V'):
+            return wordnet.VERB
+        elif treebank_tag.startswith('N'):
+            return wordnet.NOUN
+        elif treebank_tag.startswith('R'):
+            return wordnet.ADV
+        else:
+            return wordnet.ADV
+
+    wnl = WordNetLemmatizer()
+
     out = [word_tokenize(tweet) for tweet in input_data]
     out = [pos_tag(tweet) for tweet in out]
-    out = [wnl.lemmatize(word[0], pos=word[1]) for tweet in out for word in tweet]
-
+    out = [[wnl.lemmatize(word[0], pos=get_wordnet_pos(word[1])) for word in tweet] for tweet in out]
+    out = [' '.join(tweet) for tweet in out]
 
 
 def vetorizar(input_data):
