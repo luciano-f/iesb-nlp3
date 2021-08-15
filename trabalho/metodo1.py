@@ -6,7 +6,11 @@ from nltk.corpus import wordnet
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
 
+from sklearn.svm import SVC
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
+
 
 from string import punctuation, whitespace
 
@@ -18,7 +22,6 @@ y = tweets[0]
 X_orig = tweets[5]
 
 # Pré-Processamento
-
 padroes = {
     'mencao': re.compile(r'(@[A-Za-z0-9_]{1,15}:?)'),
     'hashtag': re.compile(r'(#[A-Za-z0-9_]{1,15})'),
@@ -67,16 +70,58 @@ def lematizar(input_data):
     out = [[wnl.lemmatize(word[0], pos=get_wordnet_pos(word[1])) for word in tweet] for tweet in out]
     out = [' '.join(tweet) for tweet in out]
 
+    return out
+
 
 def vetorizar(input_data):
     vetorizador = TfidfVectorizer(stop_words='english', max_features=None)
     vetorizador.fit(input_data)
     out = vetorizador.transform(input_data)
 
-    return out
+    return vetorizador, out
+
+# Classificadores
 
 
-# Classificador
+class Metodo1DecisionTree:
+
+    def __init__(self, x_set, y_set, seed=123):
+        self.X_orig = x_set
+        self.y_orig = y_set
+        self.seed = seed if seed is not None else None
+        self.split_set = None
+
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
+            self.X_orig, self.y_orig, test_size=.2, random_state=self.seed)
+
+        self.vetorizador = TfidfVectorizer(stop_words='english', max_features=None)
+
+        self.clf = DecisionTreeClassifier()
+
+    def preprocess(self):
+        self.X_train = sequencia_pre_processamento(self.X_train)
+        self.X_test = sequencia_pre_processamento(self.X_test)
+
+    def gen_tfidf(self):
+        self.vetorizador.transform(self.X_train)
+        self.X_train = self.vetorizador.transform(self.X_train)
+
+    def lematizar(self):
+        self.X_train = self.vetorizador.transform(self.X_train)
+        self.X_test = self.vetorizador.transform(self.X_test)
+
+    def treinar(self):
+        self.clf.fit(self.X_train, self.y_train)
+
+    def prever(self):
+        self.clf.predict(self.X_test)
+
+
+
+
+
+
+
 
 
 
