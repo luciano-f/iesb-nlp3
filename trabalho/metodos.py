@@ -4,7 +4,7 @@ import pandas as pd
 
 from html import unescape
 
-from scipy.sparse import csr_matrix
+from math import floor
 
 from nltk.tag import pos_tag
 from nltk.corpus import wordnet
@@ -19,7 +19,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Input,
+from tensorflow.keras.layers import Dense, Input
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
 from string import punctuation, whitespace
@@ -112,13 +112,14 @@ class MetodoGeral:
         self.X_train = sequencia_pre_processamento(self.X_train)
         self.X_test = sequencia_pre_processamento(self.X_test)
 
+    def lematizar(self):
+        self.X_train = lematizar(self.X_train)
+        self.X_test = lematizar(self.X_test)
+
     def gen_tfidf(self):
+        self.vetorizador.fit(self.X_train)
         self.vetorizador.transform(self.X_train)
         self.X_train = self.vetorizador.transform(self.X_train)
-
-    def lematizar(self):
-        self.X_train = self.vetorizador.transform(self.X_train)
-        self.X_test = self.vetorizador.transform(self.X_test)
 
     def treinar(self):
         self.clf.fit(self.X_train, self.y_train, random_state=self.seed)
@@ -153,15 +154,6 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
     def __init__(self, x_set, y_set, seed=123):
         super().__init__(x_set, y_set, seed=seed)
 
-        model = Sequential()
-        model.add(Input(shape=(x_set.shape[1],), name='entrada'))        # argumento sparse=True não permitiu processar matriz esparsa no treino
-        model.add(Dense(units=100, activation='relu', name='1a_co'))
-        model.add(Dense(units=1, activation='sigmoid', name='saida'))
-
-        model.compile(loss='binary_crossentropy',
-                      optimizer='adam',
-                      metrics=['accuracy'])
-
         es = EarlyStopping(monitor='val_loss',
                            patience=10,
                            verbose=True,
@@ -176,8 +168,25 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
         self.callbacks = [es, mc]
         self.BATCH_SIZE = 1000
 
-        self.clf = model
+        self.clf = None
         self.hist = None
+
+    def set_up_model(self):
+
+        self.preprocess()
+        self.lematizar()
+        self.gen_tfidf()
+
+        model = Sequential()
+        model.add(Input(shape=(self.X_train.shape[1],), name='entrada'))        # argumento sparse=True não permitiu processar matriz esparsa no treino
+        model.add(Dense(units=100, activation='relu', name='1a_co'))
+        model.add(Dense(units=1, activation='sigmoid', name='saida'))
+
+        model.compile(loss='binary_crossentropy',
+                      optimizer='adam',
+                      metrics=['accuracy'])
+
+        self.clf = model
 
     def data_generator(self):
         # Erro ao passar matriz esparsa 'SparseTensor' object is not subscriptable
@@ -196,14 +205,11 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
     def treinar(self):
         # Uso de fit_generator: https://www.pyimagesearch.com/2018/12/24/how-to-use-keras-fit-and-fit_generator-a-hands-on-tutorial/
         self.hist = self.clf.fit_generator(self.data_generator(),
-                                 steps_per_epoch=self.X_train.shape[0]/self.BATCH_SIZE
-                                 epochs=500,
-                                 verbose=1,
-                                 callbacks=self.callbacks,
-                                 use_multiprocessing=True)
-
-
-
+                                           steps_per_epoch=floor(self.X_train.shape[0]/self.BATCH_SIZE),
+                                           epochs=500,
+                                           verbose=1,
+                                           callbacks=self.callbacks,
+                                           use_multiprocessing=True)
 
 
 # Resultados
