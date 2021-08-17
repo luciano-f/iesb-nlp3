@@ -1,4 +1,5 @@
 import re
+import copy
 import numpy as np
 import pandas as pd
 
@@ -20,6 +21,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Dense, Input
+from tensorflow.keras.losses import BinaryCrossentropy
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
 
 from string import punctuation, whitespace
@@ -28,7 +30,7 @@ tweets = pd.read_csv('trabalho/training.1600000.processed.noemoticon.csv', heade
 tweets = tweets[~tweets.duplicated(subset=[1])].copy()
 
 # Separa as colunas de interesse
-y = tweets[0]
+y_orig = tweets[0]
 X_orig = tweets[5]
 
 # Pré-Processamento
@@ -102,7 +104,7 @@ class MetodoGeral:
         self.split_set = None
 
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            self.X_orig, self.y_orig, test_size=.2, random_state=self.seed)
+            self.X_orig, self.y_orig, test_size=500, train_size=10000, random_state=self.seed)
 
         self.vetorizador = TfidfVectorizer(stop_words='english', max_features=None)
 
@@ -120,6 +122,9 @@ class MetodoGeral:
         self.vetorizador.fit(self.X_train)
         self.vetorizador.transform(self.X_train)
         self.X_train = self.vetorizador.transform(self.X_train)
+
+    def transform_test(self):
+        self.X_test = self.vetorizador.transform(self.X_test)
 
     def treinar(self):
         self.clf.fit(self.X_train, self.y_train, random_state=self.seed)
@@ -154,6 +159,12 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
     def __init__(self, x_set, y_set, seed=123):
         super().__init__(x_set, y_set, seed=seed)
 
+        self.y_train = self.y_train/4
+        self.y_test = self.y_test /4
+
+        self.X_train, self.X_valid, self.y_train, self.y_valid = train_test_split(
+            self.X_train, self.y_train, test_size=.2, random_state=self.seed)
+
         es = EarlyStopping(monitor='val_loss',
                            patience=10,
                            verbose=True,
@@ -166,7 +177,8 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
                              save_weights_only=False,
                              mode='auto')
         self.callbacks = [es, mc]
-        self.BATCH_SIZE = 1000
+        self.BATCH_SIZE = 10
+        self.EPOCHS = 50
 
         self.clf = None
         self.hist = None
@@ -179,41 +191,81 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
 
         model = Sequential()
         model.add(Input(shape=(self.X_train.shape[1],), name='entrada'))        # argumento sparse=True não permitiu processar matriz esparsa no treino
-        model.add(Dense(units=100, activation='relu', name='1a_co'))
+        model.add(Dense(units=500, activation='relu', name='1a_co'))
+        model.add(Dense(units=300, activation='relu', name='2a_co'))
+        model.add(Dense(units=100, activation='relu', name='3a_co'))
+        model.add(Dense(units=30, activation='relu', name='4a_co'))
         model.add(Dense(units=1, activation='sigmoid', name='saida'))
 
-        model.compile(loss='binary_crossentropy',
+        model.compile(loss=BinaryCrossentropy(from_logits=True),
                       optimizer='adam',
                       metrics=['accuracy'])
 
         self.clf = model
 
-    def data_generator(self):
+    def data_generator(self, x_set=None, y_set=None):
         # Erro ao passar matriz esparsa 'SparseTensor' object is not subscriptable
         # https://stackoverflow.com/questions/53779968/why-keras-fit-generator-load-before-actually-training
-        iter_x = iter(self.X_train)
-        iter_y = iter(self.y_train)
+        x_set = self.X_train if x_set is None else x_set
+        y_set = self.y_train if y_set is None else y_set
+
+        iter_x = iter(copy.deepcopy(x_set))
+        iter_y = iter(copy.deepcopy(y_set))
         while True:
             #obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
-            x = np.zeros((self.BATCH_SIZE, self.X_train.shape[1]))
+            x = np.zeros((self.BATCH_SIZE, x_set[1]))
             y = np.zeros(self.BATCH_SIZE)
             for i in range(self.BATCH_SIZE):
-                x[i] = next(iter_x).toarray()
-                y[i] = next(iter_y)
+                try:
+                    x[i] = next(iter_x).toarray()
+                    y[i] = next(iter_y)
+                except StopIteration:
+                    iter_x = iter(copy.deepcopy(x_set))
+                    iter_y = iter(copy.deepcopy(y_set))
             yield x, y
 
+    def predict_gen(self):
+        iter_x = iter(copy.deepcopy(self.X_test))
+        while True:
+            # obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
+            x = np.zeros((self.BATCH_SIZE, self.X_test.shape[1]))
+            for i in range(self.BATCH_SIZE):
+                try:
+                    x[i] = next(iter_x).toarray()
+                except StopIteration:
+                    return
+                yield x
+
     def treinar(self):
+        G = self.data_generator()
         # Uso de fit_generator: https://www.pyimagesearch.com/2018/12/24/how-to-use-keras-fit-and-fit_generator-a-hands-on-tutorial/
-        self.hist = self.clf.fit_generator(self.data_generator(),
+        self.hist = self.clf.fit_generator(G,
                                            steps_per_epoch=floor(self.X_train.shape[0]/self.BATCH_SIZE),
-                                           epochs=500,
+                                           epochs=self.EPOCHS,
                                            verbose=1,
                                            callbacks=self.callbacks,
                                            use_multiprocessing=True)
 
+    def test(self):
+        G = self.predict_gen()
+        pred = self.clf.predict(G,
+                                steps=floor(self.X_test.shape[0]/self.BATCH_SIZE))
+
+        return pred
+
+
+
 
 # Resultados
 
+
+def rotina_m4():
+    """Rotina de configuração de uma instância m4"""
+    m4 = Metodo4NeuralNetworkEspecializada(X_orig, y_orig)
+    m4.set_up_model()
+    m4.transform_test()
+    m4.treinar()
+    return m4
 
 def gerar_indicadores(y_true, y_pred):
     f1 = f1_score(y_true, y_pred, pos_label=4)
