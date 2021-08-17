@@ -189,6 +189,10 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
         self.lematizar()
         self.gen_tfidf()
 
+        self.X_valid = sequencia_pre_processamento(self.X_valid)
+        self.X_valid = lematizar(self.X_valid)
+        self.X_valid = self.vetorizador.transform(self.X_valid)
+
         model = Sequential()
         model.add(Input(shape=(self.X_train.shape[1],), name='entrada'))        # argumento sparse=True não permitiu processar matriz esparsa no treino
         model.add(Dense(units=500, activation='relu', name='1a_co'))
@@ -213,7 +217,7 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
         iter_y = iter(copy.deepcopy(y_set))
         while True:
             #obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
-            x = np.zeros((self.BATCH_SIZE, x_set[1]))
+            x = np.zeros((self.BATCH_SIZE, x_set.shape[1]))
             y = np.zeros(self.BATCH_SIZE)
             for i in range(self.BATCH_SIZE):
                 try:
@@ -237,13 +241,16 @@ class Metodo4NeuralNetworkEspecializada(MetodoGeral):
                 yield x
 
     def treinar(self):
-        G = self.data_generator()
+        g = self.data_generator()
+        valid = self.data_generator(self.X_valid, self.y_valid)
         # Uso de fit_generator: https://www.pyimagesearch.com/2018/12/24/how-to-use-keras-fit-and-fit_generator-a-hands-on-tutorial/
-        self.hist = self.clf.fit_generator(G,
+        self.hist = self.clf.fit_generator(g,
                                            steps_per_epoch=floor(self.X_train.shape[0]/self.BATCH_SIZE),
                                            epochs=self.EPOCHS,
                                            verbose=1,
                                            callbacks=self.callbacks,
+                                           validation_data=valid,
+                                           validation_steps=floor(self.X_train.shape[0]/self.BATCH_SIZE),
                                            use_multiprocessing=True)
 
     def test(self):
