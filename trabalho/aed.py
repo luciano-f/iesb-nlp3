@@ -38,3 +38,12 @@ plot_data = tweets[2].sample(100000)
 plot_data = pd.to_datetime(plot_data).value_counts()
 sns.scatterplot(data=plot_data, x=plot_data.index, y=plot_data)
 plt.show()
+
+# Tamanho dos tweets
+# Importante para a tokenização
+split_tweets = [tweet.split() for tweet in tweets[5].values]
+word_count = [len(tweet) for tweet in split_tweets]
+word_count
+
+plot = sns.boxplot(word_count)
+plt.show()
