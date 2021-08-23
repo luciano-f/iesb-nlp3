@@ -9,7 +9,7 @@ from math import floor
 
 from nltk.tag import pos_tag
 from nltk.corpus import wordnet
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.stem import WordNetLemmatizer
 
 from sklearn.svm import SVC
@@ -21,13 +21,15 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_sc
 
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.losses import BinaryCrossentropy
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from tensorflow.keras.layers import Dense, Input, Conv1D, MaxPooling1D, Flatten
+from tensorflow.keras.layers import Dense, Input, Conv1D, MaxPooling1D, Flatten, Dropout
 
 from string import punctuation, whitespace
 
 tweets = pd.read_csv('trabalho/training.1600000.processed.noemoticon.csv', header=None, encoding='latin1')
-tweets = tweets[~tweets.duplicated(subset=[1])].copy()
+tweets = tweets[~tweets.duplicated(subset=[1], keep=False)].copy()
 
 # Separa as colunas de interesse
 y_orig = tweets[0]
@@ -36,7 +38,7 @@ X_orig = tweets[5]
 # Pré-Processamento
 padroes = {
     'mencao': re.compile(r'(@[A-Za-z0-9_]{1,15}:?)'),
-    'hashtag': re.compile(r'(#[A-Za-z0-9_]{1,15})'),
+    'hashtag': re.compile(r'(#[A-Za-z0-9_])'),
     'urls': re.compile(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+'),
     'punct': re.compile(f'\w+([{punctuation}]+)[{whitespace}]'),
 }
@@ -55,7 +57,7 @@ def sequencia_pre_processamento(input_data):
     out = [x.lower() for x in out]
     out = [x.strip() for x in out]
 
-    # reparseia entidades html: e.g: &gt;
+    # reparseia entidades html: e.g: &gt >;
     out = [unescape(x) for x in out]
 
     return out
@@ -104,7 +106,7 @@ class MetodoGeral:
         self.split_set = None
 
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            self.X_orig, self.y_orig, test_size=500, train_size=10000, random_state=self.seed)
+            self.X_orig, self.y_orig, train_size=10000, test_size=500, random_state=self.seed)
 
         self.vetorizador = TfidfVectorizer(stop_words='english', max_features=None)
 
@@ -178,7 +180,7 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
                              mode='auto')
         self.callbacks = [es, mc]
         self.BATCH_SIZE = 10
-        self.EPOCHS = 1
+        self.EPOCHS = 100
 
         self.clf = None
         self.hist = None
@@ -200,6 +202,8 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
         model.add(Dense(units=100, activation='relu', name='3a_co'))
         model.add(Dense(units=30, activation='relu', name='4a_co'))
         model.add(Dense(units=1, activation='sigmoid', name='saida'))
+
+        model.summary()
 
         model.compile(loss=BinaryCrossentropy(from_logits=True),
                       optimizer='adam',
@@ -266,17 +270,27 @@ class Metodo5NNeuralNetworkEspecializada(Metodo4NeuralNetworkKerasMLP):
     def set_up_model(self):
         # Referência: https://medium.com/@mayankverma05032001/binary-classification-using-convolution-neural-network-cnn-model-2635ddcdc510
         # https://stackoverflow.com/questions/66718335/input-0-of-layer-conv1d-is-incompatible-with-the-layer-expected-min-ndim-3-f
+        # https://towardsdatascience.com/another-twitter-sentiment-analysis-with-python-part-9-neural-networks-with-tfidf-vectors-using-d0b4af6be6d7
         super().set_up_model()
 
         # https://stackoverflow.com/questions/66718335/input-0-of-layer-conv1d-is-incompatible-with-the-layer-expected-min-ndim-3-f
         entrada = Input(shape=(self.X_train.shape[1],1), name='entrada')
-        c1 = Conv1D(32, 3, strides=2, activation='relu', input_shape=[None, entrada])(entrada)
+        c1 = Conv1D(128, 3, strides=2, activation='relu', input_shape=[None, entrada])(entrada)
         m1 = MaxPooling1D(pool_size=3)(c1)
-        c2 = Conv1D(16, 3, strides=2, activation='relu', input_shape=[None, entrada])(m1)
+        c2 = Conv1D(64, 3, strides=2, activation='relu', input_shape=[None, entrada])(m1)
         m2 = MaxPooling1D(pool_size=3)(c2)
-        f1 = Flatten()(m2)
-        d1 = Dense(units=500, activation='relu')(f1)
-        saida = Dense(units=1, activation='sigmoid')(d1)
+        c3 = Conv1D(32, 3, strides=2, activation='relu', input_shape=[None, entrada])(m2)
+        m3 = MaxPooling1D(pool_size=3)(c3)
+        c4 = Conv1D(16, 3, strides=2, activation='relu', input_shape=[None, entrada])(m3)
+        m4 = MaxPooling1D(pool_size=3)(c4)
+        f1 = Flatten()(m4)
+        d1 = Dense(units=1000, activation='sigmoid')(f1)
+        b1 = d1
+        for _ in range(10):
+            b1 = Dense(units=300, activation='sigmoid')(b1)
+            b1 = Dropout(.2)(b1)
+        d2 = Dense(units=100, activation='relu')(b1)
+        saida = Dense(units=1, activation='sigmoid')(d2)
 
         model = Model(inputs=entrada, outputs=saida)
         model.summary()
@@ -286,39 +300,105 @@ class Metodo5NNeuralNetworkEspecializada(Metodo4NeuralNetworkKerasMLP):
                       metrics=['accuracy'])
 
         self.clf = model
+        self.callbacks = self.callbacks[0]
 
-        def data_generator(self, x_set=None, y_set=None):
-            # Erro ao passar matriz esparsa 'SparseTensor' object is not subscriptable
-            # https://stackoverflow.com/questions/53779968/why-keras-fit-generator-load-before-actually-training
-            x_set = self.X_train if x_set is None else x_set
-            y_set = self.y_train if y_set is None else y_set
 
-            iter_x = iter(copy.deepcopy(x_set))
-            iter_y = iter(copy.deepcopy(y_set))
-            while True:
-                # obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
-                x = np.zeros((self.BATCH_SIZE, x_set.shape[1]))
-                y = np.zeros(self.BATCH_SIZE)
-                for i in range(self.BATCH_SIZE):
-                    try:
-                        x[i] = next(iter_x).toarray()
-                        y[i] = next(iter_y)
-                    except StopIteration:
-                        iter_x = iter(copy.deepcopy(x_set))
-                        iter_y = iter(copy.deepcopy(y_set))
-                yield x, y
+class Metodo6LSTM(Metodo4NeuralNetworkKerasMLP):
+    # Inspiração https://medium.com/@rayhantithokharisma/sentiment-classification-using-bidirectional-lstm-model-with-twitter-us-airline-sentiment-dataset-85b601200f66
 
-        def predict_gen(self):
-            iter_x = iter(copy.deepcopy(self.X_test))
-            while True:
-                # obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
-                x = np.zeros((self.BATCH_SIZE, self.X_test.shape[1]))
-                for i in range(self.BATCH_SIZE):
-                    try:
-                        x[i] = next(iter_x).toarray()
-                    except StopIteration:
-                        return
-                    yield x
+    def __init__(self, x_set, y_set, maxlen=20, seed=123):
+        super.__init__(x_set, y_set, seed)
+
+        # Maxlen é o tamanho da sequencia de tokens (veja o boxplot do tamanho dos tweets na aed para determinar o maxlen)
+        self.maxlen = maxlen
+        self.wordspace = None
+
+    def make_marked_sentences(self, x, y):
+        """ Pega cada tweet, quebra as sentenças e retorna a lista de sentenças, bem como a classificação do tweeet"""
+        sents = sent_tokenize(x)
+        wt_sents = [word_tokenize(sent) for sent in sents]
+        tagged_sents = [sent[::-1] + ['<s>'] * (self.maxlen - 1) for sent in wt_sents]
+        tagged_sents = [sent[::-1] + ['</s>'] for sent in tagged_sents]
+
+        labels = [y] * len(sents)
+
+        return tagged_sents, labels
+
+    def make_sequences(self, sent, label):
+        """
+        Recebe uma sequência taggeada (make_marked_sentences) e quebra em sequencia de tamanhos maxlen
+        :param: sent: uma sentença tageada ['<s>', '<s>', 'Oi']
+        label: label da sentença
+        :return:
+        """
+        seqs = [sent[i:i+self.maxlen] for i in range(len(sent))][:-self.maxlen]
+        labels = [label] * len(seqs)
+
+        return seqs, labels
+
+    def set_wordspace(self):
+        """Cria as features do espaço de palavras"""
+        tk_x_train = [word_tokenize(tweet) for tweet in self.X_train]
+        words = list(set([word for tweet in tk_x_train for word in tweet] + ['<s>', '</s>']))
+        self.wordspace = {word: index for word in words, for index in range(len(words))}
+
+    def vetorizar(self):
+        """
+        Reconstroi o espaço vetorial baseado no wordspace
+        :return:
+        """
+
+        train_sents = [self.make_marked_sentences(self.X_train[i], self.y_train[i]) for i in range(len(self.X_train))]
+        train_seqs = [self.make_sequences(x, y) for x, y in train_sents]
+
+        X_train = np.zeros((len(train_seqs), len(self.wordspace)))
+
+
+
+
+    def set_up_model(self):
+        # Referência: https://medium.com/@mayankverma05032001/binary-classification-using-convolution-neural-network-cnn-model-2635ddcdc510
+        # https://stackoverflow.com/questions/66718335/input-0-of-layer-conv1d-is-incompatible-with-the-layer-expected-min-ndim-3-f
+        # https://towardsdatascience.com/another-twitter-sentiment-analysis-with-python-part-9-neural-networks-with-tfidf-vectors-using-d0b4af6be6d7
+        self.preprocess()
+        self.lematizar()
+
+        # É necessário chamar uma rotina que quebra cada tweet na sequência de tweets
+        self.set_wordspace()
+
+        # https://stackoverflow.com/questions/66718335/input-0-of-layer-conv1d-is-incompatible-with-the-layer-expected-min-ndim-3-f
+        entrada = Input(shape=(self.X_train.shape[1],1), name='entrada')
+        c1 = Conv1D(128, 3, strides=2, activation='relu', input_shape=[None, entrada])(entrada)
+        m1 = MaxPooling1D(pool_size=3)(c1)
+        c2 = Conv1D(64, 3, strides=2, activation='relu', input_shape=[None, entrada])(m1)
+        m2 = MaxPooling1D(pool_size=3)(c2)
+        c3 = Conv1D(32, 3, strides=2, activation='relu', input_shape=[None, entrada])(m2)
+        m3 = MaxPooling1D(pool_size=3)(c3)
+        c4 = Conv1D(16, 3, strides=2, activation='relu', input_shape=[None, entrada])(m3)
+        m4 = MaxPooling1D(pool_size=3)(c4)
+        f1 = Flatten()(m4)
+        d1 = Dense(units=1000, activation='sigmoid')(f1)
+        b1 = d1
+        for _ in range(10):
+            b1 = Dense(units=300, activation='sigmoid')(b1)
+            b1 = Dropout(.2)(b1)
+        d2 = Dense(units=100, activation='relu')(b1)
+        saida = Dense(units=1, activation='sigmoid')(d2)
+
+        model = Model(inputs=entrada, outputs=saida)
+        model.summary()
+
+        model.compile(loss=BinaryCrossentropy(from_logits=True),
+                      optimizer='adam',
+                      metrics=['accuracy'])
+
+        self.clf = model
+        self.callbacks = self.callbacks[0]
+
+
+
+
+
 
 # Resultados
 
