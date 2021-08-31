@@ -123,7 +123,6 @@ class MetodoGeral:
 
     def gen_tfidf(self):
         self.vetorizador.fit(self.X_train)
-        self.vetorizador.transform(self.X_train)
 
     def transform_train(self):
         self.X_train = self.vetorizador.transform(self.X_train)
@@ -171,7 +170,7 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
             self.X_train, self.y_train, test_size=.2, random_state=self.seed)
 
         es = EarlyStopping(monitor='val_loss',
-                           patience=10,
+                           patience=25,
                            verbose=True,
                            mode='auto',
                            restore_best_weights=True)
@@ -181,9 +180,9 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
                              save_best_only=True,
                              save_weights_only=False,
                              mode='auto')
-        self.callbacks = [es] #, mc]
+        self.callbacks = [es, mc]
         self.BATCH_SIZE = 128
-        self.EPOCHS = 100
+        self.EPOCHS = 500
 
         self.clf = None
         self.hist = None
@@ -258,7 +257,7 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
                                            verbose=1,
                                            callbacks=self.callbacks,
                                            validation_data=valid,
-                                           validation_steps=floor(self.X_train.shape[0]/self.BATCH_SIZE),
+                                           validation_steps=floor(self.X_valid.shape[0]/self.BATCH_SIZE),
                                            use_multiprocessing=True)
 
     def test(self):
@@ -464,27 +463,29 @@ class Metodo7BagOfWordsLSTM(Metodo4NeuralNetworkKerasMLP):
 
 class Metodo8EmbeddingLSTM(Metodo4NeuralNetworkKerasMLP):
 
-    def __init__(self, x_set, y_set, maxlen=70, seed=123):
+    def __init__(self, x_set, y_set, maxlen=40, seed=123):
         super().__init__(x_set, y_set, seed)
 
         # Maxlen é o tamanho da sequencia de tokens (veja o boxplot do tamanho dos tweets na aed para determinar o maxlen)
         self.maxlen = maxlen
-        self.wordspace = Word2Vec(self.X_train, vector_size=100, window=5, min_count=1)
+        self.embedding = None
 
     def set_up_model(self):
         self.preprocess()
         self.lematizar()
-        self.gen_tfidf()
+        self.X_train = [word_tokenize(tweet) for tweet in self.X_train]
+
+        self.embedding = Word2Vec(self.X_train, vector_size=512, window=5, min_count=1)
 
         self.X_valid = sequencia_pre_processamento(self.X_valid)
         self.X_valid = lematizar(self.X_valid)
-        self.X_valid = self.vetorizador.transform(self.X_valid)
+        self.X_valid = [word_tokenize(tweet) for tweet in self.X_valid]
 
         model = Sequential()
         # model.add(Input(shape=(1, self.X_train.shape[1]),
         #                name='entrada'))  # argumento sparse=True não permitiu processar matriz esparsa no treino
-        model.add(LSTM(units=128, name='1a_cr', input_shape=(self.n_gram_size, self.X_train.shape[1])))
-        model.add(Dropout(.25))
+        model.add(LSTM(units=256, name='1a_cr', activation='relu', input_shape=(self.maxlen, self.embedding.vector_size)))
+        model.add(Dropout(.2))
         model.add(Dense(units=128, activation='relu', name='1a_cd'))
         model.add(Dropout(.1))
         model.add(Dense(units=64, activation='relu', name='2a_cd'))
@@ -492,11 +493,62 @@ class Metodo8EmbeddingLSTM(Metodo4NeuralNetworkKerasMLP):
 
         model.summary()
 
-        model.compile(loss=BinaryCrossentropy(from_logits=True),
+        model.compile(loss=BinaryCrossentropy(),
                       optimizer='adam',
                       metrics=['accuracy'])
 
         self.clf = model
+
+    def sent_to_vector(self, sent: list):
+        """
+        :param sent: Iterável com lista de tokens da sentença a vetorizar, na ordem de ocorrência
+        :return: array com a sentença vetorizada
+        """
+        out_array = np.zeros((self.maxlen, self.embedding.vector_size))
+        i = 0
+        for t in sent:
+            if i >= self.maxlen:
+                break
+
+            if t in self.embedding.wv.key_to_index.keys():
+                out_array[i, :] = self.embedding.wv[t]
+
+            i += 1
+
+        return out_array
+
+    def data_generator(self, x_set=None, y_set=None):
+        # Para o embedding, não estamos mais lidando com uma matriz esparsa, mas X é a lista de listas de tokens
+        x_set = self.X_train if x_set is None else x_set
+        y_set = self.y_train if y_set is None else y_set
+
+        iter_x = iter(copy.deepcopy(x_set))
+        iter_y = iter(copy.deepcopy(y_set))
+        while True:
+            #obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
+            x = np.zeros((self.BATCH_SIZE, self.maxlen, self.embedding.vector_size))
+            y = np.zeros(self.BATCH_SIZE)
+            for i in range(self.BATCH_SIZE):
+                try:
+                    x[i] = self.sent_to_vector(next(iter_x))
+                    y[i] = next(iter_y)
+                except StopIteration:
+                    iter_x = iter(copy.deepcopy(x_set))
+                    iter_y = iter(copy.deepcopy(y_set))
+            yield x, y
+
+    def treinar(self):
+        g = self.data_generator()
+        valid = self.data_generator(self.X_valid, self.y_valid)
+        # Uso de fit_generator: https://www.pyimagesearch.com/2018/12/24/how-to-use-keras-fit-and-fit_generator-a-hands-on-tutorial/
+        self.hist = self.clf.fit_generator(g,
+                                           steps_per_epoch=floor(len(self.X_train)/self.BATCH_SIZE),
+                                           epochs=self.EPOCHS,
+                                           verbose=1,
+                                           callbacks=self.callbacks,
+                                           validation_data=valid,
+                                           validation_steps=floor(len(self.X_valid)/self.BATCH_SIZE),
+                                           use_multiprocessing=True)
 
 
 
@@ -527,3 +579,7 @@ def gerar_indicadores(y_true, y_pred):
     acc = accuracy_score(y_true, y_pred)
 
     return acc, pre, rec, f1
+
+
+if __name__ == '__main__':
+    pass
