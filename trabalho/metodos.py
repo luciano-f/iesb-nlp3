@@ -181,7 +181,7 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
                              save_best_only=True,
                              save_weights_only=False,
                              mode='auto')
-        self.callbacks = [es, mc]
+        self.callbacks = [es] #, mc]
         self.BATCH_SIZE = 128
         self.EPOCHS = 100
 
