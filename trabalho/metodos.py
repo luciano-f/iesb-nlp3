@@ -7,6 +7,9 @@ from html import unescape
 
 from math import floor
 
+import gensim
+from gensim.models import Word2Vec
+
 from nltk.tag import pos_tag
 from nltk.corpus import wordnet
 from nltk.tokenize import word_tokenize, sent_tokenize
@@ -24,7 +27,7 @@ from tensorflow.keras.losses import BinaryCrossentropy
 from tensorflow.keras.preprocessing.text import Tokenizer
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 from tensorflow.keras.callbacks import EarlyStopping, ModelCheckpoint
-from tensorflow.keras.layers import Dense, Input, Conv1D, MaxPooling1D, Flatten, Dropout
+from tensorflow.keras.layers import Dense, Input, Conv1D, MaxPooling1D, Flatten, Dropout, LSTM
 
 from string import punctuation, whitespace
 
@@ -106,11 +109,9 @@ class MetodoGeral:
         self.split_set = None
 
         self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
-            self.X_orig, self.y_orig, train_size=10000, test_size=500, random_state=self.seed)
+            self.X_orig, self.y_orig, train_size=20000, test_size=2000, random_state=self.seed)
 
         self.vetorizador = TfidfVectorizer(stop_words='english', max_features=None)
-
-        self.clf = DecisionTreeClassifier()
 
     def preprocess(self):
         self.X_train = sequencia_pre_processamento(self.X_train)
@@ -123,13 +124,15 @@ class MetodoGeral:
     def gen_tfidf(self):
         self.vetorizador.fit(self.X_train)
         self.vetorizador.transform(self.X_train)
+
+    def transform_train(self):
         self.X_train = self.vetorizador.transform(self.X_train)
 
     def transform_test(self):
         self.X_test = self.vetorizador.transform(self.X_test)
 
     def treinar(self):
-        self.clf.fit(self.X_train, self.y_train, random_state=self.seed)
+        self.clf.fit(self.X_train, self.y_train)
 
     def prever(self):
         self.clf.predict(self.X_test)
@@ -139,14 +142,14 @@ class Metodo1DecisionTree(MetodoGeral):
     def __init__(self, x_set, y_set, seed=123):
         super().__init__(x_set, y_set, seed=123)
 
-        self.clf = DecisionTreeClassifier()
+        self.clf = DecisionTreeClassifier(random_state=self.seed)
 
 
 class Metodo2Svm(MetodoGeral):
     def __init__(self, x_set, y_set, seed=123):
         super().__init__(x_set, y_set, seed=seed)
 
-        self.clf = SVC()
+        self.clf = SVC(random_state=self.seed)
 
 
 class Metodo3NeuralNetwork(MetodoGeral):
@@ -179,7 +182,7 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
                              save_weights_only=False,
                              mode='auto')
         self.callbacks = [es, mc]
-        self.BATCH_SIZE = 10
+        self.BATCH_SIZE = 128
         self.EPOCHS = 100
 
         self.clf = None
@@ -190,6 +193,7 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
         self.preprocess()
         self.lematizar()
         self.gen_tfidf()
+        self.transform_train()
 
         self.X_valid = sequencia_pre_processamento(self.X_valid)
         self.X_valid = lematizar(self.X_valid)
@@ -307,7 +311,7 @@ class Metodo6LSTM(Metodo4NeuralNetworkKerasMLP):
     # Inspiração https://medium.com/@rayhantithokharisma/sentiment-classification-using-bidirectional-lstm-model-with-twitter-us-airline-sentiment-dataset-85b601200f66
 
     def __init__(self, x_set, y_set, maxlen=20, seed=123):
-        super.__init__(x_set, y_set, seed)
+        super().__init__(x_set, y_set, seed)
 
         # Maxlen é o tamanho da sequencia de tokens (veja o boxplot do tamanho dos tweets na aed para determinar o maxlen)
         self.maxlen = maxlen
@@ -340,7 +344,7 @@ class Metodo6LSTM(Metodo4NeuralNetworkKerasMLP):
         """Cria as features do espaço de palavras"""
         tk_x_train = [word_tokenize(tweet) for tweet in self.X_train]
         words = list(set([word for tweet in tk_x_train for word in tweet] + ['<s>', '</s>']))
-        self.wordspace = {word: index for word in words, for index in range(len(words))}
+        self.wordspace = {word: index for word in words for index in range(len(words))}
 
     def vetorizar(self):
         """
@@ -352,8 +356,6 @@ class Metodo6LSTM(Metodo4NeuralNetworkKerasMLP):
         train_seqs = [self.make_sequences(x, y) for x, y in train_sents]
 
         X_train = np.zeros((len(train_seqs), len(self.wordspace)))
-
-
 
 
     def set_up_model(self):
@@ -396,6 +398,105 @@ class Metodo6LSTM(Metodo4NeuralNetworkKerasMLP):
         self.callbacks = self.callbacks[0]
 
 
+class Metodo7BagOfWordsLSTM(Metodo4NeuralNetworkKerasMLP):
+
+    def set_up_model(self):
+        self.preprocess()
+        self.lematizar()
+        self.gen_tfidf()
+        self.transform_train()
+
+        self.X_valid = sequencia_pre_processamento(self.X_valid)
+        self.X_valid = lematizar(self.X_valid)
+        self.X_valid = self.vetorizador.transform(self.X_valid)
+
+        model = Sequential()
+        # model.add(Input(shape=(1, self.X_train.shape[1]),
+        #                name='entrada'))  # argumento sparse=True não permitiu processar matriz esparsa no treino
+        model.add(LSTM(units=128, name='1a_cr', input_shape=(1, self.X_train.shape[1])))
+        model.add(Dropout(.25))
+        model.add(Dense(units=128, activation='relu', name='1a_cd'))
+        model.add(Dropout(.1))
+        model.add(Dense(units=64, activation='relu', name='2a_cd'))
+        model.add(Dense(units=1, activation='sigmoid', name='saida'))
+
+        model.summary()
+
+        model.compile(loss=BinaryCrossentropy(from_logits=True),
+                      optimizer='adam',
+                      metrics=['accuracy'])
+
+        self.clf = model
+
+    def data_generator(self, x_set=None, y_set=None):
+        # Erro ao passar matriz esparsa 'SparseTensor' object is not subscriptable
+        # https://stackoverflow.com/questions/53779968/why-keras-fit-generator-load-before-actually-training
+        x_set = self.X_train if x_set is None else x_set
+        y_set = self.y_train if y_set is None else y_set
+
+        iter_x = iter(copy.deepcopy(x_set))
+        iter_y = iter(copy.deepcopy(y_set))
+        while True:
+            #obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
+            x = np.zeros((self.BATCH_SIZE, 1, x_set.shape[1]))
+            y = np.zeros(self.BATCH_SIZE)
+            for i in range(self.BATCH_SIZE):
+                try:
+                    x[i] = next(iter_x).toarray()
+                    y[i] = next(iter_y)
+                except StopIteration:
+                    iter_x = iter(copy.deepcopy(x_set))
+                    iter_y = iter(copy.deepcopy(y_set))
+            yield x, y
+
+    def predict_gen(self):
+        iter_x = iter(copy.deepcopy(self.X_test))
+        while True:
+            # obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
+            x = np.zeros((self.BATCH_SIZE, 1, self.X_test.shape[1]))
+            for i in range(self.BATCH_SIZE):
+                try:
+                    x[i] = next(iter_x).toarray()
+                except StopIteration:
+                    return
+                yield x
+
+
+class Metodo8EmbeddingLSTM(Metodo4NeuralNetworkKerasMLP):
+
+    def __init__(self, x_set, y_set, maxlen=70, seed=123):
+        super().__init__(x_set, y_set, seed)
+
+        # Maxlen é o tamanho da sequencia de tokens (veja o boxplot do tamanho dos tweets na aed para determinar o maxlen)
+        self.maxlen = maxlen
+        self.wordspace = Word2Vec(self.X_train, vector_size=100, window=5, min_count=1)
+
+    def set_up_model(self):
+        self.preprocess()
+        self.lematizar()
+        self.gen_tfidf()
+
+        self.X_valid = sequencia_pre_processamento(self.X_valid)
+        self.X_valid = lematizar(self.X_valid)
+        self.X_valid = self.vetorizador.transform(self.X_valid)
+
+        model = Sequential()
+        # model.add(Input(shape=(1, self.X_train.shape[1]),
+        #                name='entrada'))  # argumento sparse=True não permitiu processar matriz esparsa no treino
+        model.add(LSTM(units=128, name='1a_cr', input_shape=(self.n_gram_size, self.X_train.shape[1])))
+        model.add(Dropout(.25))
+        model.add(Dense(units=128, activation='relu', name='1a_cd'))
+        model.add(Dropout(.1))
+        model.add(Dense(units=64, activation='relu', name='2a_cd'))
+        model.add(Dense(units=1, activation='sigmoid', name='saida'))
+
+        model.summary()
+
+        model.compile(loss=BinaryCrossentropy(from_logits=True),
+                      optimizer='adam',
+                      metrics=['accuracy'])
+
+        self.clf = model
 
 
 
@@ -410,6 +511,13 @@ def rotina_m4():
     m4.transform_test()
     m4.treinar()
     return m4
+
+def rotina_classica(m: MetodoGeral):
+    """Rotina de configuração de uma instância que herda do método geral"""
+    m.set_up_model()
+    m.transform_test()
+    m.treinar()
+    return m
 
 
 def gerar_indicadores(y_true, y_pred):

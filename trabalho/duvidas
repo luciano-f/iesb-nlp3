@@ -1,0 +1,7 @@
+NLP:
+    Usar embedding (word2vec)
+    Usar redes recorrentes (LSTM)
+    Pesquisar combinação de recorrente com convolucionais
+    Pesquisar se há uso de redutores de dimensionalidade
+    
+    
