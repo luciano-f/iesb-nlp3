@@ -11,7 +11,7 @@ import gensim
 from gensim.models import Word2Vec
 
 from nltk.tag import pos_tag
-from nltk.corpus import wordnet
+from nltk.corpus import wordnet, stopwords
 from nltk.tokenize import word_tokenize, sent_tokenize
 from nltk.stem import WordNetLemmatizer
 
@@ -20,7 +20,7 @@ from sklearn.tree import DecisionTreeClassifier
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, roc_curve
 
 from tensorflow.keras.models import Sequential, Model
 from tensorflow.keras.losses import BinaryCrossentropy
@@ -134,7 +134,7 @@ class MetodoGeral:
         self.clf.fit(self.X_train, self.y_train)
 
     def prever(self):
-        self.clf.predict(self.X_test)
+        return self.clf.predict(self.X_test)
 
 
 class Metodo1DecisionTree(MetodoGeral):
@@ -170,7 +170,7 @@ class Metodo4NeuralNetworkKerasMLP(MetodoGeral):
             self.X_train, self.y_train, test_size=.2, random_state=self.seed)
 
         es = EarlyStopping(monitor='val_loss',
-                           patience=25,
+                           patience=10,
                            verbose=True,
                            mode='auto',
                            restore_best_weights=True)
@@ -475,7 +475,7 @@ class Metodo8EmbeddingLSTM(Metodo4NeuralNetworkKerasMLP):
         self.lematizar()
         self.X_train = [word_tokenize(tweet) for tweet in self.X_train]
 
-        self.embedding = Word2Vec(self.X_train, vector_size=512, window=5, min_count=1)
+        self.embedding = Word2Vec(self.X_train, vector_size=256, window=5, min_count=1)
 
         self.X_valid = sequencia_pre_processamento(self.X_valid)
         self.X_valid = lematizar(self.X_valid)
@@ -537,6 +537,18 @@ class Metodo8EmbeddingLSTM(Metodo4NeuralNetworkKerasMLP):
                     iter_y = iter(copy.deepcopy(y_set))
             yield x, y
 
+    def predict_gen(self):
+        iter_x = iter(copy.deepcopy(self.X_test))
+        while True:
+            # obs: esse método precisa ser chamado após X_train receber a transformação de espaço para tdidf
+            x = np.zeros((self.BATCH_SIZE, self.maxlen, self.embedding.vector_size))
+            for i in range(self.BATCH_SIZE):
+                try:
+                    x[i] = self.sent_to_vector(next(iter_x))
+                except StopIteration:
+                    return
+                yield x
+
     def treinar(self):
         g = self.data_generator()
         valid = self.data_generator(self.X_valid, self.y_valid)
@@ -549,6 +561,74 @@ class Metodo8EmbeddingLSTM(Metodo4NeuralNetworkKerasMLP):
                                            validation_data=valid,
                                            validation_steps=floor(len(self.X_valid)/self.BATCH_SIZE),
                                            use_multiprocessing=True)
+
+    def test(self):
+        G = self.predict_gen()
+        pred = self.clf.predict(G,
+                                steps=floor(len(self.X_test)/self.BATCH_SIZE))
+
+        return pred
+
+
+class MetodoGeralEmbedding(MetodoGeral):
+
+    def __init__(self, x_set, y_set, seed=123):
+        super().__init__(x_set=x_set, y_set=y_set, seed=seed)
+
+        self.maxlen = 40
+        self.embedding = None
+
+    def gerar_embedding(self):
+        """
+        Deve ser chamado após a lematização
+        :return:
+        """
+        x_embed = [word_tokenize(tweet) for tweet in self.X_train]
+
+        self.embedding = Word2Vec(x_embed, vector_size=100, window=5, min_count=1)
+        pass
+
+    def sent_to_vector(self, sent: list):
+        """
+        :param sent: Iterável com lista de tokens da sentença a vetorizar, na ordem de ocorrência
+        :return: array com a sentença vetorizada
+        """
+        out_array = np.zeros((self.maxlen, self.embedding.vector_size))
+        i = 0
+        for t in sent:
+            if i >= self.maxlen:
+                break
+
+            if t in self.embedding.wv.key_to_index.keys():
+                out_array[i, :] = self.embedding.wv[t]
+
+            i += 1
+
+        out_array = out_array.flatten()
+
+        return out_array
+
+    def transform_train(self):
+        self.X_train = [self.sent_to_vector(tweet) for tweet in self.X_train]
+
+    def transform_test(self):
+        self.X_test = [self.sent_to_vector(tweet) for tweet in self.X_test]
+
+
+class Metodo9SvmEmbedding(MetodoGeralEmbedding):
+
+    def __init__(self, x_set, y_set, seed=123):
+        super().__init__(x_set, y_set, seed=seed)
+
+        self.clf = SVC(random_state=self.seed)
+
+
+class Metodo10DecisionTreeEmbedding(MetodoGeralEmbedding):
+
+    def __init__(self, x_set, y_set, seed=123):
+        super().__init__(x_set, y_set, seed=seed)
+
+        self.clf = DecisionTreeClassifier(random_state=self.seed)
 
 
 
