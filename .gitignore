@@ -4,3 +4,5 @@
 /trabalho/training.1600000.processed.noemoticon.csv.zip
 /trabalho/.ipynb_checkpoints/
 /trabalho/best_model.h5
+*/*best_model.h5
+/best_model.h5
